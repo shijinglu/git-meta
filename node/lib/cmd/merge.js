@@ -91,6 +91,19 @@ exports.configureParser = function (parser) {
         constant: true,
         help: "abort an in-progress merge",
     });
+    parser.addArgument(["--allow-half-open"], {
+        action: "storeConst",
+        constant: true,
+        defaultValue: false,
+        help: "allow using half opened repos inside .git/modules for " +
+            "merging instead of always fully opening them",
+    });
+    parser.addArgument(["--abort-on-conflict"], {
+        action: "storeConst",
+        constant: true,
+        defaultValue: false,
+        help: "abort if there are merge conflicts",
+    });
 };
 
 /**
@@ -114,7 +127,6 @@ exports.executeableSubcommand = co.wrap(function *(args) {
 
     const MODE = MergeUtil.MODE;
     let mode = MODE.NORMAL;
-
     if (args.ff + args.continue + args.abort + args.no_ff + args.ff_only > 1) {
         throw new UserError(
                 "Cannot use ff, no-ff, ff-only, abort, or continue together.");
@@ -167,8 +179,18 @@ Merge of '${commitName}'
         return GitUtil.editMessage(repo, message);
     };
     const commit = yield repo.getCommit(commitish.id());
-    const result =
-          yield MergeUtil.merge(repo, commit, mode, args.message, editMessage);
+    const mergeOpts = {
+        mode: mode,
+        allowHalfOpen: args.allow_half_open,
+        abortOnConflict: args.abort_on_conflict,
+    };
+
+    const result = yield MergeUtil.merge(
+        repo,
+        commit,
+        mergeOpts,
+        args.message,
+        editMessage);
     if (null !== result.errorMessage) {
         throw new UserError(result.errorMessage);
     }

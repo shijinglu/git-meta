@@ -514,19 +514,22 @@ exports.getTemplatePath = co.wrap(function *(repo) {
  * @param {String}             name
  * @param {String}             url
  * @param {String|null}        templatePath
+ * @param {Boolean}            allowHalfOpen
  * @return {NodeGit.Repository}
  */
 exports.initSubmoduleAndRepo = co.wrap(function *(repoUrl,
                                                   metaRepo,
                                                   name,
                                                   url,
-                                                  templatePath) {
+                                                  templatePath, 
+                                                  allowHalfOpen) {
     if (null !== repoUrl) {
         assert.isString(repoUrl);
     }
     assert.instanceOf(metaRepo, NodeGit.Repository);
     assert.isString(name);
     assert.isString(url);
+    assert.isBoolean(allowHalfOpen);
     if (null !== templatePath) {
         assert.isString(templatePath);
     }
@@ -543,15 +546,16 @@ exports.initSubmoduleAndRepo = co.wrap(function *(repoUrl,
 
     const FLAGS = NodeGit.Repository.INIT_FLAG;
 
+    let halfOpenedRepo = null;
     // See if modules repo exists.
-
+    // update following logic to allow for using half opened repos
     try {
-        yield NodeGit.Repository.open(subRepoDir);
+        halfOpenedRepo = yield NodeGit.Repository.open(subRepoDir);
     }
     catch (e) {
         // Or, make it if not.
 
-        yield NodeGit.Repository.initExt(subRepoDir, {
+        halfOpenedRepo = yield NodeGit.Repository.initExt(subRepoDir, {
             workdirPath: exports.computeRelativeWorkDir(name),
             flags: FLAGS.NO_DOTGIT_DIR | FLAGS.MKPATH |
                 FLAGS.RELATIVE_GITLINK |
@@ -560,6 +564,9 @@ exports.initSubmoduleAndRepo = co.wrap(function *(repoUrl,
         });
     }
 
+    if (allowHalfOpen && halfOpenedRepo)  {
+        return halfOpenedRepo;
+    }
 
     // Write out the .git file.  Note that `initExt` configured to write a
     // relative .git directory will not write this file successfully if the

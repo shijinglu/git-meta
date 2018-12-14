@@ -60,15 +60,18 @@ const SubmoduleFetcher    = require("./submodule_fetcher");
  * @param {String}           submoduleName
  * @param {String}           submoduleSha
  * @param {String|null}      templatePath
+ * @param {boolean}          allowHalfOpen
  * @return {NodeGit.Repository}
  */
 exports.openOnCommit = co.wrap(function *(fetcher,
                                           submoduleName,
                                           submoduleSha,
-                                          templatePath) {
+                                          templatePath, 
+                                          allowHalfOpen) {
     assert.instanceOf(fetcher, SubmoduleFetcher);
     assert.isString(submoduleName);
     assert.isString(submoduleSha);
+    assert.isBoolean(allowHalfOpen);
     if (null !== templatePath) {
         assert.isString(templatePath);
     }
@@ -77,13 +80,13 @@ exports.openOnCommit = co.wrap(function *(fetcher,
     const submoduleUrl = yield fetcher.getSubmoduleUrl(submoduleName);
 
     // Set up the submodule.
-
     const submoduleRepo = yield SubmoduleConfigUtil.initSubmoduleAndRepo(
                                                                 metaRepoUrl,
                                                                 metaRepo,
                                                                 submoduleName,
                                                                 submoduleUrl,
-                                                                templatePath);
+                                                                templatePath, 
+                                                                allowHalfOpen);
 
     // Turn off GC for the submodule
     const config = yield submoduleRepo.config();
@@ -216,10 +219,11 @@ Opener.prototype.isOpen = co.wrap(function *(subName) {
  * is *unset*; since this operation is expensive, we cannot do it automatically
  * each time a submodule is opened.
  *
- * @param {String} subName
+ * @param {String}  subName
+ * @param {boolean} allowHalfOpen
  * @return {NodeGit.Repository}
  */
-Opener.prototype.getSubrepo = co.wrap(function *(subName) {
+Opener.prototype.getSubrepo = co.wrap(function *(subName, allowHalfOpen) {
     if (!this.d_initialized) {
         yield this._initialize();
     }
@@ -238,7 +242,8 @@ Opening ${colors.blue(subName)} on ${colors.green(sha)}.`);
         subRepo = yield exports.openOnCommit(this.d_fetcher,
                                              subName,
                                              sha,
-                                             this.d_templatePath);
+                                             this.d_templatePath, 
+                                             allowHalfOpen);
     }
     this.d_subRepos[subName] = subRepo;
     return subRepo;

@@ -138,6 +138,9 @@ exports.fastForwardMerge = co.wrap(function *(repo, commit, message) {
  * @param {Open.Opener}        opener
  * @param {NodeGit.Index}      metaIndex
  * @param {Object}             subs        map from name to SubmoduleChange
+ * @param {Object}             mergeOpts
+ * @param {boolean}            mergeOpts.allowHalfOpen
+ * @param {boolean}            mergeOpts.abortOnConflict
  * @return {Object}
  * @return {Object} return.commits    map from name to map from new to old ids
  * @return {Object} return.conflicts  map from name to commit causing conflict
@@ -146,7 +149,8 @@ const mergeSubmodules = co.wrap(function *(repo,
                                            opener,
                                            index,
                                            subs,
-                                           message) {
+                                           message, 
+                                           mergeOpts) {
     assert.instanceOf(repo, NodeGit.Repository);
     assert.instanceOf(opener, Open.Opener);
     assert.instanceOf(index, NodeGit.Index);
@@ -159,8 +163,11 @@ const mergeSubmodules = co.wrap(function *(repo,
     };
     const sig = yield ConfigUtil.defaultSignature(repo);
     const fetcher = yield opener.fetcher();
-    const mergeSubmodule = co.wrap(function *(name) {
-        const subRepo = yield opener.getSubrepo(name);
+    // allow retry with
+    // recursive fashion -> anything in the middle status
+    const mergeSubmodule = co.wrap(function *(mergeParam) {
+        const {name, allowHalfOpen} = mergeParam;
+        const subRepo = yield opener.getSubrepo(name, allowHalfOpen);
         const change = subs[name];
 
         const fromSha = change.newSha;
@@ -197,9 +204,23 @@ ${colors.green(fromSha)}.`);
             checkoutStrategy: NodeGit.Checkout.STRATEGY.FORCE,
         });
 
-        // Abort if conflicted.
+        // Pause if conflicted.
 
         if (subIndex.hasConflicts()) {
+            result.conflicts[name] = fromSha;
+            // Abort merge if mergeOpts.abortOnConflict turned on
+            if (mergeOpts.abortOnConflict) {
+                yield exports.abort(repo);
+                return;                                               // RETURN
+            }
+            // Retry with full open if previously half open
+            if (allowHalfOpen) {
+                yield mergeSubmodule({
+                    name: name,
+                    allowHalfOpen: false,
+                });
+                return;
+            }
             const seq = new SequencerState({
                 type: MERGE,
                 originalHead: new CommitAndRef(subHead.id().tostrS(), null),
@@ -209,7 +230,6 @@ ${colors.green(fromSha)}.`);
                 message: message,
             });
             yield SequencerStateUtil.writeSequencerState(subRepo.path(), seq);
-            result.conflicts[name] = fromSha;
             return;                                                   // RETURN
         }
 
@@ -230,7 +250,13 @@ ${colors.green(fromSha)}.`);
         yield index.addByPath(name);
         yield index.conflictRemove(name);
     });
-    yield DoWorkQueue.doInParallel(Object.keys(subs), mergeSubmodule);
+    const params = Object.keys(subs).map(name => {
+        return {
+            name: name,
+            allowHalfOpen: mergeOpts.allowHalfOpen,
+        };
+    });
+    yield DoWorkQueue.doInParallel(params, mergeSubmodule);
     return result;
 });
 
@@ -250,7 +276,10 @@ ${colors.green(fromSha)}.`);
  * @async
  * @param {NodeGit.Repository} repo
  * @param {NodeGit.Commit}     commit
- * @param {MODE}               mode
+ * @param {Object}             mergeOpts
+ * @param {MODE}               mergeOpts.mode
+ * @param {boolean}            mergeOpts.allowHalfOpen
+ * @param {boolean}            mergeOpts.abortOnConflict
  * @param {String|null}        commitMessage
  * @param {() -> Promise(String)} editMessage
  * @return {Object}
@@ -260,11 +289,13 @@ ${colors.green(fromSha)}.`);
  */
 exports.merge = co.wrap(function *(repo,
                                    commit,
-                                   mode,
+                                   mergeOpts,
                                    commitMessage,
                                    editMessage) {
     assert.instanceOf(repo, NodeGit.Repository);
-    assert.isNumber(mode);
+    assert.isNumber(mergeOpts.mode);
+    assert.isBoolean(mergeOpts.allowHalfOpen);
+    assert.isBoolean(mergeOpts.abortOnConflict);
     assert.instanceOf(commit, NodeGit.Commit);
     if (null !== commitMessage) {
         assert.isString(commitMessage);
@@ -321,7 +352,7 @@ running merge.`);
                                                    commitSha,
                                                    head.id().tostrS());
     let message = "";
-    if (!canFF || MODE.FORCE_COMMIT === mode) {
+    if (!canFF || MODE.FORCE_COMMIT === mergeOpts.mode) {
         if (null === commitMessage) {
             const raw = yield editMessage();
             message = GitUtil.stripMessage(raw);
@@ -335,11 +366,11 @@ running merge.`);
         }
     }
 
-    if (MODE.FF_ONLY === mode && !canFF) {
+    if (MODE.FF_ONLY === mergeOpts.mode && !canFF) {
         throw new UserError(`The meta-repository cannot be fast-forwarded to \
 ${colors.red(commitSha)}.`);
     }
-    else if (canFF && MODE.FORCE_COMMIT !== mode) {
+    else if (canFF && MODE.FORCE_COMMIT !== mergeOpts.mode) {
         console.log(`Fast-forwarding meta-repo to ${colors.green(commitSha)}.`);
 
         result.metaCommit = commitSha;
@@ -372,8 +403,13 @@ ${colors.red(commitSha)}.`);
 
     // Then do the submodule merges
 
-    const merges =
-          yield mergeSubmodules(repo, opener, index, changes.changes, message);
+    const merges = yield mergeSubmodules(
+        repo, 
+        opener, 
+        index, 
+        changes.changes, 
+        message, 
+        mergeOpts);
     result.submoduleCommits = merges.commits;
     const conflicts = merges.conflicts;
 

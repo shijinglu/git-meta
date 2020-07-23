@@ -337,3 +337,18 @@ exports.listWorkdirChanges = co.wrap(function *(repo, status, includeUnstaged) {
 
     return result;
 });
+
+
+/**
+ * Revparse treeish (String) to Tree object
+ */
+exports.revparseTreeish = co.wrap(function *(repo, treeish) {
+    if (!treeish) {
+        return null;
+    }
+    assert.isString(treeish);
+    assert.instanceOf(repo, NodeGit.Repository);
+    const obj = yield NodeGit.Revparse.single(repo, treeish);
+    const tree = yield obj.peel(NodeGit.Object.TYPE.TREE);
+    return tree;
+});

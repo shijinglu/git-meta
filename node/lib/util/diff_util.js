@@ -32,10 +32,12 @@
 
 const assert  = require("chai").assert;
 const co      = require("co");
-const NodeGit = require("nodegit");
+const spawn   = require("child-process-promise").spawn;
 
+const NodeGit             = require("nodegit");
 const RepoStatus          = require("./repo_status");
 const SubmoduleConfigUtil = require("./submodule_config_util");
+const TreeUtil            = require("./tree_util");
 
 const DELTA = NodeGit.Diff.DELTA;
 
@@ -163,4 +165,93 @@ exports.getRepoStatus = co.wrap(function *(repo,
         staged: indexToTreeStatus,
         workdir: workdirToIndexStatus,
     };
+});
+
+exports.getOptions = co.wrap(function *(repo, args) {
+    assert.instanceOf(repo, NodeGit.Repository);
+
+    const opts = {
+        diffOpts: new NodeGit.DiffOptions(),
+        treeish1: null,
+        treeish1: null,
+        t1: null,
+        t2: null,
+        argOpts: [],
+        argPaths: [],
+    };
+    let i0 = process.argv.indexOf("diff");
+    i0 = (i0 === -1) ? 0 : i0;
+    let i1 = process.argv.indexOf("--");
+    i1 = (i1 === -1) ? process.argv.length : i1;
+    
+    const argOpts = process.argv.slice(i0 + 1, i1);
+    const argPaths = process.argv.slice(i1 + 1, process.argv.length);
+    if (args.commits && args.commits.length) {
+        const treeish1 = args.commits[0];
+        if (!argPaths.includes(treeish1)) {
+            opts.treeish1 = treeish1;
+            if (args.commits.length > 1) {
+                const treeish2 = args.commits[1];
+                if (!argPaths.includes(treeish2)) {
+                    opts.treeish2 = treeish2;
+                }
+            }
+        }
+    }
+    opts.argOpts = argOpts.filter(w => (w !== opts.treeish1) && ((w !== opts.treeish2)) );
+    opts.argPaths = argPaths;
+    opts.t1 = yield TreeUtil.revparseTreeish(repo, opts.treeish1);
+    opts.t2 = yield TreeUtil.revparseTreeish(repo, opts.treeish2);
+    return opts;
+});
+
+const subDiffCmdBuilder = co.wrap(function *(metaRepo, subRepo, opts) {
+    const path      = require("path");
+    const metaDir   = metaRepo.workdir();
+    const subDir    = subRepo.workdir();
+    const subPath   = path.relative(metaDir, subDir);
+    const argOpts   = opts.argOpts;
+    const argPaths  = opts.argPaths;
+    let treeishStr  = "";
+    if(argPaths && argPaths.length > 0) {
+        const relativePaths = argPaths.map(p => {
+            const relative = path.relative(subPath, p);
+            if (relative.startsWith("..")) {
+                return null;
+            } else if (relative === "") {
+                return ".";
+            }
+            return relative;
+        }).filter(p => p !== null);
+        if (relativePaths.length === 0) {
+            return "";
+        }
+        return `git -C ${subPath} diff ${argOpts.join(" ")} ${treeishStr} -- ${relativePaths.join(" ")}`;
+    }
+    return `git -C ${subPath} diff ${argOpts.join(" ")} ${treeishStr}`;
+});
+
+exports.getDiffWithOptions = co.wrap(function *(repo, opts) {
+    assert.instanceOf(repo, NodeGit.Repository);
+    const {diffOpts, t1, t2} = opts;
+    let diff = null;
+    if (t1 && t2) {
+        diff = yield NodeGit.Diff.treeToTree(repo, t1, t2, diffOpts);
+    } else if (t1) {
+        diff = yield NodeGit.Diff.treeToWorkdirWithIndex(repo, t1, null, diffOpts);
+    }  else {
+        diff = yield NodeGit.Diff.indexToWorkdir(repo, null, diffOpts);
+    }
+    return diff;
+});
+
+exports.printDiff = co.wrap(function *(repo, subRepo, opts) {
+    assert.instanceOf(repo, NodeGit.Repository);
+    assert.instanceOf(subRepo, NodeGit.Repository);
+    const execStr = yield subDiffCmdBuilder(repo, subRepo, opts);
+    console.log("qqqq execStr = '" + execStr + "'");
+    yield spawn(execStr, {
+        shell: true,
+        stdio: 'inherit'
+    });
 });

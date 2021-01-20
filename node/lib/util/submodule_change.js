@@ -53,7 +53,6 @@ class SubmoduleChange {
      * @param {String | null} ourSha sha against which changes will be applied
      */
     constructor(oldSha, newSha, ourSha) {
-        assert.notEqual(oldSha, newSha);
         if (null !== oldSha) {
             assert.isString(oldSha);
         }
